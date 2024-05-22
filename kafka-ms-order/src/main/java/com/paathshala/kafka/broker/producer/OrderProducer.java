@@ -76,7 +76,8 @@ public class OrderProducer {
 
 		headers.add(surpriseBonusHeader);
 
-		return new ProducerRecord<String, OrderMessage>("t-commodity-order", null, message.getOrderNumber(), message,
+		return new ProducerRecord<String, OrderMessage>("t-commodity-order", null,
+				message.getOrderNumber(), message,
 				headers);
 	}
 

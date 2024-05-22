@@ -17,7 +17,10 @@ Sr. No.     Part          Command
                           docker-compose -f docker-compose-full-sample.yml -p full-sample up -d
 
 
-                          
+For us, the docker-compose-core.yml did not work, so we have copied another docker file
+docker-compose-multi-broker.yml
+
+Use command docker-compose -f docker-compose-multi-broker.yml up
 
 
  Producer message has:
@@ -38,3 +41,158 @@ kafka-ms-order    (Producer)
 kafka-ms-pattern  (Consumer) -> consumes msg aggregate by item name
 kafka-ms-reward   (Consumer) -> consumes msg aggregate by location
 kafka-ms-storage  (Consumer) -> No aggregation
+
+
+=================
+
+kakfa commands
+=================
+
+docker exec -it kakfka1 bash
+
+kafka-topics --bootstrap-server kafka1:19092 --list
+
+__consumer_offsets
+t-commodity-order
+t-commodity-order-reply
+
+
+================
+Postman
+================
+Import file spring-kafka-postman-collection.json into Postman
+and run the POST command in
+Course - Spring Kafka 4 / Microservices & Kafka Stream / commodity Order / Order1 Random Item
+
+Response:
+
+{
+    "orderNumber": "HURQRLHL"
+}
+
+To validate order in kafka topic, use command
+
+kafka-console-consumer --bootstrap-server localhost:19092 --from-beginning --topic t-commodity-order
+
+{"orderLocation":"Romania","orderNumber":"HURQRLHL","creditCardNumber":"9392446112537350",
+"orderDateTime":"2024-05-22T11:58:20","itemName":"Plastic Hat","price":2,"quantity":847}
+
+Also check if the message got saved in H2 using
+
+URL->http://localhost:9001/h2-console
+&
+JDBC URL->jdbc:h2:mem:kafkaorderdb
+&
+SQL->select * from orders
+
+select * from order_items
+
+
+==============
+another topic
+==============
+
+kafka-topics --bootstrap-server kafka1:19092 --create --partitions 1 --replication-factor 1 --topic t-commodity-promotion
+
+Created topic t-commodity-promotion
+
+
+===============================================
+2 different ways for producer to send messages
+===============================================
+
+1. Synchronous
+
+PromotionProducer.java
+
+public void publish(PromotionMessage message) {
+		try {
+			var sendResult = kafkaTemplate.send("t-commodity-promotion", message).get();
+			LOG.info("Send result success for message {}", sendResult.getProducerRecord().value());
+		} catch (InterruptedException | ExecutionException e) {
+			LOG.error("Error publishing {}, because {}", message, e.getMessage());
+		}
+	}
+
+
+2. Asynchronous
+
+OrderProducer.java
+
+public void publish(OrderMessage message) throws ExecutionException, InterruptedException {
+		var producerRecord = buildProducerRecord(message);
+
+		/*kafkaTemplate.send(producerRecord)
+				.addCallback(new ListenableFutureCallback<SendResult<String, OrderMessage>>() {
+
+					@Override
+					public void onSuccess(SendResult<String, OrderMessage> result) {
+						LOG.info("Order {}, item {} published succesfully", message.getOrderNumber(),
+								message.getItemName());
+					}
+
+					@Override
+					public void onFailure(Throwable ex) {
+						LOG.warn("Order {}, item {} failed to publish because {}", message.getOrderNumber(),
+								message.getItemName(), ex.getMessage());
+					}
+				});*/
+
+		CompletableFuture<SendResult<String, OrderMessage>> future = kafkaTemplate.send(producerRecord);
+		CompletableFuture<String> mapped = future
+				.thenApply(result -> {
+					// or future.thenApply(SendResult::getMetadata).thenApply(metadata ->...
+					var metadata = result.getRecordMetadata();
+					var partition = metadata.partition();
+					var offset = metadata.offset();
+					//log success
+					LOG.info("Order {}, item {} published succesfully", message.getOrderNumber(),
+							message.getItemName());
+					return String.format("%d-%d", partition, offset);
+
+				}).exceptionally(err -> {
+					//log error - shouldn't this be "payload" instead of "message"?
+					LOG.warn("Order {}, item {} failed to publish because {}", message.getOrderNumber(),
+							message.getItemName(), err.getMessage());
+					return null;
+				});
+
+		LOG.info("Just a dummy message for order {}, item {}", message.getOrderNumber(), message.getItemName());
+
+		mapped.get();
+	}
+
+  =====================
+  Promotion
+  ====================
+  OPen Postman / Course - Spring Kafka 4 / Microservices & Kafka Stream / Promotion / Create Promotion
+
+  Request body:
+
+  {
+	"promotionCode" : "{{$randomWord}}{{$randomInt}}"
+}
+
+Response:
+
+yellow666
+
+kafka-console-consumer --bootstrap-server localhost:19092 --from-beginning --topic t-commodity-promotion
+
+{"promotionCode":"yellow666"}
+{"promotionCode":"Strategist515"}
+
+===============================
+Storage App - Kafka consumer
+===============================
+
+Promotion code and Discount code published to
+t-commodity-promotion
+and storage app consumer listens to t-commodity-promotion
+
+Creating discount via Postman
+
+Response
+
+lavender192 with 50% discount
+lime708 with 5% discount
